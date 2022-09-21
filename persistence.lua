@@ -1,6 +1,12 @@
 --[[
-    Sup this is designed to allow a user to easily save or retrieve persistent data 
-    from the local computer. 
+    Persistence API
+
+    Author
+        Rob, Discord @MegaKerfuffle#9278
+
+    Summary
+        The Persistence API is intended to allow a program to easily save, load, and
+        delete persistently saved data on the local computer.  
 ]]
 
 -- Create the data directory if it doesn't already exist.
