@@ -23,6 +23,7 @@
         - register: string username, string password
         - login: string username, string password
         - unregister: string username, string password
+        - clearnace: string username
         Admin 
         - delete_user: string username, string authToken
         - set_clearance: string username, int newClearance, string authToken
@@ -32,20 +33,23 @@
         - ack: string details
         - success: string details
         - failure: string details
-        - login_token: string authToken
+        - login_token: string authToken, user userData
+        - clearance: string username, string clearance
 ]]
 
 -- Settings
-local modemLocation = "top"
+local intModemLocation = "top"
+local extModemLocation = "back"
 local listenChannel = 12460
 
--- Internal data
+-- Internal Vars
 local database = {}
 local tokens = {}
-local modem = peripheral.wrap(modemLocation)
+local intModem = peripheral.wrap(intModemLocation)
+local extModem = peripheral.wrap(extModemLocation)
 local commands = {
     -- Public commands; no auth required.
-    ["register"] = function(message, returnChannel)
+    ["register"] = function(message, returnChannel, modem)
         if (IsUser(message[2])) then
             modem.transmit(returnChannel, listenChannel, {"failure", "User already registered."})
             return
@@ -54,7 +58,7 @@ local commands = {
         AddUser(message[2], message[3])
         modem.transmit(returnChannel, listenChannel, {"success", "Registered user ".. message[2]})
     end,
-    ["unregister"] = function(message, returnChannel)
+    ["unregister"] = function(message, returnChannel, modem)
         if (IsUser[message[2]] and VerifyAccess(message[2], message[3])[1]) then
             RemoveUser(message[2])
             print("Removed user ".. message[2])
@@ -64,12 +68,15 @@ local commands = {
             modem.transmit(returnChannel, listenChannel, {"failure", "Failed to unregister user."})
         end
     end,
-    ["login"] = function(message, returnChannel)
+    ["login"] = function(message, returnChannel, modem)
         if (IsUser(message[2])) then
-            if (VerifyAccess(message[2], message[3])) then
-                local token = LoginUser(message[2], message[3])[2]
-                print("Successfully logged user ".. message[2] " in.")
-                modem.transmit(returnChannel, listenChannel, {"login_token", token})
+            local auth = LoginUser(message[2], message[3])
+            if (auth[1]) then
+                local token = auth[2]
+                local publicUser = GetUser(message[2])
+                publicUser.password = nil
+                print("Successfully logged user in.")
+                modem.transmit(returnChannel, listenChannel, {"login_token", token, publicUser})
             else
                 print("Can't login; invalid credentials.")
                 modem.transmit(returnChannel, listenChannel, {"failure", "Invalid credentials."})
@@ -79,12 +86,27 @@ local commands = {
             modem.transmit(returnChannel, listenChannel, {"failure", "User doesn't exist."})
         end
     end,
+    ["clearance"] = function(message, returnChannel, modem)
+        if (IsUser(message[2])) then
+            local user = GetUser(message[2])
+            print("Retrieved clearance for a user.")
+            modem.transmit(returnChannel, listenChannel, {"clearance", user.name, user.clearance})
+        else
+            print("Couldn't retrieve clearance; user doesn't exist.")
+            modem.transmit(returnChannel, listenChannel, {"failure", "Invalid user."})
+        end
+    end,
 }
 
 -- Load our custom APIs
 os.loadAPI("persistence.lua")
 os.loadAPI("user.lua")
 
+
+-- Persistently save the database.
+function SaveDatabase()
+    persistence.save("cas-data", database)
+end
 
 -- Generates a unique login token.
 function GenerateToken()
@@ -129,7 +151,8 @@ function AddUser(username, password)
     end
     newUser.uid = userId
     table.insert(database, newUser)
-    persistence.save("cas-data", database)
+    SaveDatabase()
+    print("Added a user.")
     return {true, "Successfully added user."}
 end
 
@@ -138,8 +161,8 @@ end
 function RemoveUser(username)
     for key, value in pairs(database) do
         if value.name == username then
-            table.remove(database, index)
-            persistence.save("cas-data", database)
+            table.remove(database, key)
+            SaveDatabase()
             return {true, "Successfully removed user."}
         end
     end
@@ -149,13 +172,14 @@ end
 
 -- Attempt to login a user. Returns a login token if successful.
 function LoginUser(username, password)
-    if (VerifyAccess(username, password)) then
+    if (VerifyAccess(username, password)[1]) then
         local user = GetUser(username)
         if (user == nil) then
-            return
+            return {false, nil}
         end
     
         local userToken = GenerateToken()
+        -- FIXME: Tokens need to be replaced on multiple logins.
         table.insert(tokens, {[user.uid] = userToken})
         return {true, userToken}
     else
@@ -182,7 +206,7 @@ function VerifyAccess(username, password)
     if (user == nil) then
         return { false, "User not in database."}
     else
-        local verified = user.check_password(password)
+        local verified = user.password == password
         local outcome
         if verified then
             outcome = "Access granted."
@@ -211,7 +235,7 @@ end
 -- Check if a user exists in the database.
 function IsUser(username)
     for index, value in pairs(database) do
-        if (value.username == username) then
+        if (value.name == username) then
             return true
         end
     end
@@ -222,7 +246,7 @@ end
 -- Retrieve the user with a given username.
 function GetUser(username)
     for index, value in pairs(database) do
-        if (value.username == username) then
+        if (value.name == username) then
             return value
         end
     end
@@ -237,14 +261,27 @@ function Main()
     end
 
     -- Open our listener channel.
-    modem.open(12460)
-    print("Opened listener...")
+    intModem.open(listenChannel)
+    extModem.open(listenChannel)
+    print("Opened listener on channel ".. listenChannel)
     while true do
         local event, modemSide, senderChannel, replyChannel,
         message = os.pullEvent("modem_message")
+
+        -- Find which modem we gotta use to reply.
+        local modem
+        if (modemSide == intModemLocation) then
+            modem = intModem
+        elseif (modemSide == extModemLocation) then
+            modem = extModem
+        else
+            print("Could not determine modem; aborting...")
+            return
+        end
+
         local command = commands[message[1]]
         if (command) then
-            command(message, replyChannel)
+            command(message, replyChannel, modem)
         else
             print("Invalid command received.")
             modem.transmit(replyChannel, listenChannel, {"ack", "Invalid command."})
@@ -252,5 +289,92 @@ function Main()
     end
 end
 
+
+-- Management stuff
+
+function Manager_RegisterUser()
+    print("User Registration")
+    print("Username: ")
+    local username = read()
+    print("Password: ")
+    local password = read("*")
+    AddUser(username, password)
+    print("Done!")
+    os.sleep(2)
+    term.clear()
+    term.setCursorPos(1,1)
+end
+
+function Manager_DeleteUser()
+    print("User Deletion")
+    print("Enter username: ")
+    local username = read()
+    print("Are you sure? (Y/N)")
+    local inp = read()
+    while true do
+        if (inp == "N") then
+            return
+        elseif (inp == "Y") then
+            RemoveUser(username)
+            print("Done!")
+            os.sleep(2)
+            term.clear()
+            term.setCursorPos(1,1)
+            return
+        else
+            print("Are you sure? (Y/N)")
+        end
+    end
+end 
+
+function Manager_SetClearance()
+    print("User Clearance")
+    print("Enter username: ")
+    local username = read()
+    print("Enter clearance level: ")
+    local clearance = read()
+    local user = GetUser(username)
+    print("got user" .. user.name)
+    user.clearance = clearance
+    SaveDatabase()
+    print("Done!")
+    os.sleep(2)
+    term.clear()
+    term.setCursorPos(1,1)
+end
+
+function Manager_ListEntries()
+    print("Users")
+    for index, value in pairs(database) do
+        print(index .." - ".. value.name .." (C"..value.clearance..")")
+    end
+    print("Done!")
+    os.sleep(2)
+    term.clear()
+    term.setCursorPos(1,1)
+end
+
+function ManagerMain()
+    while true do
+        print("What would you like to do? (".. #database .. " database entries)")
+        print("1) Register a user")
+        print("2) Delete a user")
+        print("3) Set user clearance")
+        print("4) List users")
+        local inp = read()
+        if (inp == "1") then
+            Manager_RegisterUser()
+        elseif (inp == "2") then
+            Manager_DeleteUser()
+        elseif (inp == "3") then
+            Manager_SetClearance()
+        elseif (inp == "4") then
+            Manager_ListEntries()
+        else
+            print("Invalid input.")
+        end
+    end
+end
+
 -- Run the program.
-Main()
+parallel.waitForAll(Main, ManagerMain)

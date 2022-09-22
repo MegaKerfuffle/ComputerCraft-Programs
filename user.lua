@@ -33,6 +33,7 @@ function new(username, password)
         uid = 0,
         name = username,
         password = password,
+        balance = 25.0,
         clearance = "0", -- a string
     }, umetatable)
 end
