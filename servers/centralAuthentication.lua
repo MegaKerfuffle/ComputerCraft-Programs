@@ -23,7 +23,8 @@
         - register: string username, string password
         - login: string username, string password
         - unregister: string username, string password
-        - clearnace: string username
+        - clearance: string username
+        - check_token: string token
         Admin 
         - delete_user: string username, string authToken
         - set_clearance: string username, int newClearance, string authToken
@@ -34,6 +35,7 @@
         - success: string details
         - failure: string details
         - login_token: string authToken, user userData
+        - verify_token: bool isValid, string reason
         - clearance: string username, string clearance
 ]]
 
@@ -96,6 +98,13 @@ local commands = {
             modem.transmit(returnChannel, listenChannel, {"failure", "Invalid user."})
         end
     end,
+    ["check_token"] = function(message, returnChannel, modem)
+        local response = {"verify_token", CheckToken(message[2])}
+        if (not response[2]) then
+            response[3] = "Failed to verify login token; please login again."
+        end
+        modem.transmit(returnChannel, listenChannel, response)
+    end
 }
 
 -- Load our custom APIs
@@ -118,6 +127,18 @@ function GenerateToken()
     end)
 end
 
+
+-- Check if a token is valid.
+function CheckToken(token)
+    for index, value in pairs(tokens) do
+        if (value == token) then
+            print("Verified token for user ID ".. index)
+            return true
+        end
+    end
+    print("Couldn't verify token.")
+    return false
+end
 
 -- Validate the uniqueness of a UID.
 function ValidateUID(uid)
