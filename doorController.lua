@@ -20,6 +20,7 @@
         - "detectPos2" - vector; position 2 for the detection box
         - "clearance" - string; minimum clearance for the door
         - "defaultState" - bool; is the door open by default
+        - "currentState" - bool; is the door open right now
         - "outputSide" - string; side to use for redstone output
 ]]
 
@@ -28,16 +29,13 @@ os.loadAPI("persistence.lua")
 
 -- Settings
 local modemLocation = "bottom"
-local managerChannel = 12458
-local listenChannel = 12459
+local managerChannel = 12459
+local listenChannel = 12458
 
 -- Internal
 local modem = peripheral.wrap(modemLocation)
 local currentOutput = false
 local config = persistence.load("door-config")
-if (config == nil) then
-    ConfigDoor()
-end
 
 -- Used to register this door with the Door Manager.
 function RegisterSelf()
@@ -46,35 +44,46 @@ function RegisterSelf()
         config
     }
     modem.transmit(managerChannel, listenChannel, configMsg)
+    print("Sent registration data. Opening listener...")
+    CloseDoor()
     Listen()
 end
 
 
 -- Listen for door instructions.
 function Listen()
+    modem.open(managerChannel)
     while true do
         local event, modemSide, senderChannel, replyChannel,
         message = os.pullEventRaw("modem_message")
         if (message[1] == config["identifier"]) then
             if (message[2] == "openDoor") then
-                print("Opening door if able.")
-                if (currentOutput and config["defaultState"]) then
-                    SetOutput(false)
-                elseif (not currentOutput and not config["defaultState"]) then
-                    SetOutput(true)
-                end
+                OpenDoor()
             elseif (message[2] == "closeDoor") then
-                print("Closing door if able.")
-                if (not currentOutput and config["defaultState"]) then
-                    SetOutput(true)
-                elseif (currentOutput and not config["defaultState"]) then
-                    SetOutput(false)
-                end
+                CloseDoor()
             end
         end
     end
 end
 
+
+function OpenDoor()
+    print("Opening door.")
+    if (currentOutput and config["defaultState"]) then
+        SetOutput(false)
+    elseif (not currentOutput and not config["defaultState"]) then
+        SetOutput(true)
+    end
+end
+
+function CloseDoor()
+    print("Closing door if able.")
+    if (not currentOutput and config["defaultState"]) then
+        SetOutput(true)
+    elseif (currentOutput and not config["defaultState"]) then
+        SetOutput(false)
+    end
+end
 
 -- Set the door's output. This doesn't care about the door's default state.
 function SetOutput(bool)
@@ -117,6 +126,7 @@ function ConfigDoor()
         ["detectPos2"] = pos2,
         ["clearance"] = clearance,
         ["defaultState"] = defaultState,
+        ["currentState"] = true,
         ["outputSide"] = outputSide
     }
     persistence.save("door-config", config)
@@ -133,6 +143,10 @@ function GetVectorFromString(string)
     return vector.new(chunks[1], chunks[2], chunks[3]) 
 end
 
+
+if (config == nil) then
+    ConfigDoor()
+end
 
 -- Run the registration and listener.
 -- NOTE: Tempted to add a local control interface that allows a user
